@@ -1,6 +1,9 @@
+.idea/
 data/
+datasets/
 weight_norms/
 *pyc
 inception_net/
 *.npy
 *.npz
+stylegan2_ada_pytorch/results/

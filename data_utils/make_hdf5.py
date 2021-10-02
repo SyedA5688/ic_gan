@@ -23,6 +23,8 @@ import torch
 import utils
 import torchvision.transforms.functional as tv_f
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+
 
 def prepare_parser():
     usage = "Parser for ImageNet HDF5 scripts."
