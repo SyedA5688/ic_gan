@@ -4,7 +4,7 @@
   "root_feats": "COCO256_feats_selfsupervised_resnet50.hdf5",
   "root_nns": "COCO256_feats_selfsupervised_resnet50_nn_k5.hdf5",
   "gpus": 2,
-  "slurm": true,
+  "slurm": false,
   "aug": "noaug",
   "lrate": 0.003,
   "gamma": 0.5,

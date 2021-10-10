@@ -4,7 +4,7 @@
 
 resolution=$2 # 64,128,256
 dataset=$1 #'imagenet', 'imagenet_lt',  'coco', [a transfer dataset, such as 'cityscapes']
-out_path='/home/cougarnet.uh.edu/srizvi7/Desktop/ic_gan/datasets/amr/hdf5s'
+out_path='/home/cougarnet.uh.edu/srizvi7/Desktop/ic_gan/datasets/amr/hdf5s/'
 path_imnet=''
 path_swav='/home/cougarnet.uh.edu/srizvi7/Desktop/ic_gan/datasets/swav_800ep_pretrain.pth.tar'
 path_classifier_lt='resnet50_uniform_e90.pth'
