@@ -38,6 +38,7 @@ from metrics import metric_main
 import torch.distributed as dist
 
 # ----------------------------------------------------------------------------
+os.environ['CUDA_VISIBLE_DEVICES'] = "2,3"
 
 
 def setup_snapshot_image_grid(training_set, random_seed=0):

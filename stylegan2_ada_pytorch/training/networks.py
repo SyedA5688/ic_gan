@@ -21,6 +21,7 @@ from torch_utils.ops import conv2d_resample
 from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from torch_utils.ops import fma
+from .perceiver_io_modified import PerceiverIO
 
 # ----------------------------------------------------------------------------
 
@@ -353,6 +354,133 @@ class MappingNetwork(torch.nn.Module):
                     )
         return x
 
+
+@persistence.persistent_class
+class PerceiverMappingNetwork(torch.nn.Module):
+    def __init__(
+        self,
+        z_dim,  # Input latent (Z) dimensionality, 0 = no latent.
+        c_dim,  # Conditioning label (C) dimensionality, 0 = no label.
+        h_dim,  # Conditioning instance (H) dimensionality, 0 = no features.
+        w_dim,  # Intermediate latent (W) dimensionality.
+        num_ws,  # Number of intermediate latents to output, None = do not broadcast.
+        num_layers=8,  # Number of mapping layers.
+        embed_features=None,  # Label embedding dimensionality, None = same as w_dim.
+        embed_features_feat=None,  # Instance embedding dimensionality, None = same as w_dim.
+        layer_features=None,  # Number of intermediate features in the mapping layers, None = same as w_dim.
+        activation="lrelu",  # Activation function: 'relu', 'lrelu', etc.
+        lr_multiplier=0.01,  # Learning rate multiplier for the mapping layers.
+        w_avg_beta=0.995,  # Decay for tracking the moving average of W during training, None = do not track.
+        # Perceiver parameters
+        num_latents=256,
+        latent_dim=512,
+        cross_heads=1,  # number of heads for cross attention
+        latent_heads=8,  # number of heads for latent self attention
+        cross_dim_head=64,  # number of dimensions per cross attention head
+        latent_dim_head=64,  # number of dimensions per latent self attention head
+        weight_tie_layers=False
+    ):
+        super().__init__()
+        self.z_dim = z_dim
+        self.c_dim = c_dim
+        self.h_dim = h_dim
+        self.w_dim = w_dim
+        self.num_ws = num_ws
+        self.num_layers = num_layers
+        self.w_avg_beta = w_avg_beta
+
+        if embed_features is None:
+            embed_features = w_dim
+        if embed_features_feat is None:
+            embed_features_feat = w_dim
+        if c_dim == 0:
+            embed_features = 0
+        if h_dim == 0:
+            embed_features_feat = 0
+        if layer_features is None:
+            layer_features = w_dim
+
+        if c_dim > 0:
+            self.embed = FullyConnectedLayer(c_dim, embed_features)
+        if h_dim > 0:
+            self.embed_feats = FullyConnectedLayer(h_dim, embed_features_feat)
+
+        input_dim = z_dim + embed_features + embed_features_feat
+        # Output dimensionality: w_dim
+        self.perceiver = PerceiverIO(
+          dim=input_dim,                            # dimension of sequence to be encoded
+          queries_dim=w_dim,                        # dimension of decoder queries
+          logits_dim=-1,                            # dimension of final logits (ignore if backbone=True)
+          depth=num_layers,                         # depth of net
+          num_latents=num_latents,                  # number of latents, or induced set points, or centroids. different papers giving it different names
+          latent_dim=latent_dim,                    # latent dimension
+          cross_heads=cross_heads,                  # number of heads for cross attention. paper said 1
+          latent_heads=latent_heads,                # number of heads for latent self attention, 8
+          cross_dim_head=cross_dim_head,            # number of dimensions per cross attention head
+          latent_dim_head=latent_dim_head,          # number of dimensions per latent self attention head
+          weight_tie_layers=weight_tie_layers,      # whether to weight tie layers (optional, as indicated in the diagram)
+          backbone=True                             # whether to use the perceiver IO backbone only, no classification layer
+        )
+
+        if num_ws is not None and w_avg_beta is not None:
+            self.register_buffer("w_avg", torch.zeros([w_dim]))
+
+    def forward(
+        self, z, c, h, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False
+    ):
+        # Embed, normalize, and concat inputs.
+        x = None
+        with torch.autograd.profiler.record_function("input"):
+            if self.z_dim > 0:
+                misc.assert_shape(z, [None, self.z_dim])
+                x = normalize_2nd_moment(z.to(torch.float32))
+            if self.c_dim > 0 and self.h_dim > 0:
+                misc.assert_shape(c, [None, self.c_dim])
+                misc.assert_shape(h, [None, self.h_dim])
+                y = torch.cat(
+                    [
+                        self.embed(c.to(torch.float32)),
+                        self.embed_feats(h.to(torch.float32)),
+                    ],
+                    dim=1,
+                )
+                y = normalize_2nd_moment(y)
+                x = torch.cat([x, y], dim=1) if x is not None else y
+            elif self.c_dim > 0:
+                misc.assert_shape(c, [None, self.c_dim])
+                y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
+                x = torch.cat([x, y], dim=1) if x is not None else y
+            elif self.h_dim > 0:
+                misc.assert_shape(h, [None, self.h_dim])
+                h = normalize_2nd_moment(self.embed_feats(h.to(torch.float32)))
+                x = torch.cat([x, h], dim=1) if x is not None else h
+
+            # Main mapping network.
+            x = self.perceiver(x, queries=z)
+
+            # Update moving average of W.
+            if self.w_avg_beta is not None and self.training and not skip_w_avg_update:
+                with torch.autograd.profiler.record_function("update_w_avg"):
+                    self.w_avg.copy_(
+                        x.detach().mean(dim=0).lerp(self.w_avg, self.w_avg_beta)
+                    )
+
+            # Broadcast.
+            if self.num_ws is not None:
+                with torch.autograd.profiler.record_function("broadcast"):
+                    x = x.unsqueeze(1).repeat([1, self.num_ws, 1])
+
+            # Apply truncation.
+            if truncation_psi != 1:
+                with torch.autograd.profiler.record_function("truncate"):
+                    assert self.w_avg_beta is not None
+                    if self.num_ws is None or truncation_cutoff is None:
+                        x = self.w_avg.lerp(x, truncation_psi)
+                    else:
+                        x[:, :truncation_cutoff] = self.w_avg.lerp(
+                            x[:, :truncation_cutoff], truncation_psi
+                        )
+            return x
 
 # ----------------------------------------------------------------------------
 
@@ -718,6 +846,7 @@ class Generator(torch.nn.Module):
         img_channels,  # Number of output color channels.
         mapping_kwargs={},  # Arguments for MappingNetwork.
         synthesis_kwargs={},  # Arguments for SynthesisNetwork.
+        use_perceiver_mapping=False
     ):
         super().__init__()
         self.z_dim = z_dim
@@ -733,14 +862,24 @@ class Generator(torch.nn.Module):
             **synthesis_kwargs,
         )
         self.num_ws = self.synthesis.num_ws
-        self.mapping = MappingNetwork(
-            z_dim=z_dim,
-            c_dim=c_dim,
-            h_dim=h_dim,
-            w_dim=w_dim,
-            num_ws=self.num_ws,
-            **mapping_kwargs,
-        )
+        if use_perceiver_mapping:
+            self.mapping = PerceiverMappingNetwork(
+                z_dim=z_dim,
+                c_dim=c_dim,
+                h_dim=h_dim,
+                w_dim=w_dim,
+                num_ws=self.num_ws,
+                **mapping_kwargs,
+            )
+        else:
+            self.mapping = MappingNetwork(
+                z_dim=z_dim,
+                c_dim=c_dim,
+                h_dim=h_dim,
+                w_dim=w_dim,
+                num_ws=self.num_ws,
+                **mapping_kwargs,
+            )
 
     def forward(
         self, z, c, feats, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs

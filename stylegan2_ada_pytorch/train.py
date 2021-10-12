@@ -327,6 +327,14 @@ def setup_training_loop_kwargs(
     )
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
+    if args.use_perceiver_mapping:
+        args.G_kwargs.mapping_kwargs.num_latents = 256
+        args.G_kwargs.mapping_kwargs.latent_dim = 512
+        args.G_kwargs.mapping_kwargs.cross_heads = 1
+        args.G_kwargs.mapping_kwargs.latent_heads = 8
+        args.G_kwargs.mapping_kwargs.cross_dim_head = 64
+        args.G_kwargs.mapping_kwargs.latent_dim_head = 64
+        args.G_kwargs.mapping_kwargs.weight_tie_layers = False
     if hidden_dim_c is not None:
         args.G_kwargs.mapping_kwargs.embed_features = hidden_dim_c
         args.D_kwargs.mapping_kwargs.embed_features = hidden_dim_c
