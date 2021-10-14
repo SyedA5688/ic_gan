@@ -7,3 +7,4 @@ inception_net/
 *.npy
 *.npz
 stylegan2_ada_pytorch/results/
+stylegan2_ada_pytorch/results_debug/
