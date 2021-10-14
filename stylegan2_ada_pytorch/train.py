@@ -93,6 +93,7 @@ def setup_training_loop_kwargs(
     allow_tf32=None,  # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench=None,  # Disable cuDNN benchmarking: <bool>, default = False
     workers=None,  # Override number of DataLoader workers: <int>, default = 3
+    use_perceiver_mapping=False,
     **kwargs,
 ):
     args = dnnlib.EasyDict()
@@ -315,6 +316,7 @@ def setup_training_loop_kwargs(
         w_dim=512,
         mapping_kwargs=dnnlib.EasyDict(),
         synthesis_kwargs=dnnlib.EasyDict(),
+        use_perceiver_mapping=use_perceiver_mapping
     )
     args.D_kwargs = dnnlib.EasyDict(
         class_name="training.networks.Discriminator",
@@ -327,7 +329,8 @@ def setup_training_loop_kwargs(
     )
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
-    if args.use_perceiver_mapping:
+    if use_perceiver_mapping:
+        print("Using perceiver mapping network")
         args.G_kwargs.mapping_kwargs.num_latents = 256
         args.G_kwargs.mapping_kwargs.latent_dim = 512
         args.G_kwargs.mapping_kwargs.cross_heads = 1
