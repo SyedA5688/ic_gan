@@ -325,11 +325,12 @@ class MappingNetwork(torch.nn.Module):
                 h = normalize_2nd_moment(self.embed_feats(h.to(torch.float32)))
                 x = torch.cat([x, h], dim=1) if x is not None else h
 
-        # Main layers.
+        # Main layers.  x shape: [batch_size, 1024]
         for idx in range(self.num_layers):
             layer = getattr(self, f"fc{idx}")
             x = layer(x)
 
+        # x shape: [batch_size, 512]
         # Update moving average of W.
         if self.w_avg_beta is not None and self.training and not skip_w_avg_update:
             with torch.autograd.profiler.record_function("update_w_avg"):
